@@ -5,7 +5,187 @@ date: "2023-12-02"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 ```
 
-## 
+# Geospatial Analysis of Los Angeles Redlining Districts, HOLC grades and Bird Sightings
+
+Author: Fletcher McConnell
+
+Repository: <https://github.com/fletcher-m/los-angeles-redlining-districts>
+
+## About 
+
+This R markdown document contains code that was used to construct maps detailing various census districts in Los Angeles.
+
+## Highlights
+
+-   Data wrangling and exploration with `tidyverse`
+
+-   Geospatial data wrangling with `sf`
+
+-   Map making with `Tmap` and `GGPlot`
+
+-   Creating and customizing a bar chart
+
+-   Creating and customizing spatial plot
+
+## About the Data
+
+In this notebook, I use 3 datasets:
+
+EJScreen Data Can be found here: <https://www.epa.gov/ejscreen/download-ejscreen-data>
+
+LA Redlining Data can be found here: [https://dsl.richmond.edu/panorama/redlining/static/downloads/geojson](https://dsl.richmond.edu/panorama/redlining/static/downloads/geojson/CALosAngeles1939.geojson)
+
+Bird Data can be found here: gbif.org
+
+The following Columns In EJScreen are defined here:
+
+PWDIS -\> percentile for waste water discharge
+
+LOWINCPCT --\> percent low income
+
+P_PM25 -\> percentile for particulate matter 2.5
+
+LIFEEXPPCT -\> percentile for low life expectancy
+
+P_CANCER -\> percentile for air toxics cancer risk
+
+## Final Output 
+
+![](waste_water_la.png)
+
+![](redline_la.png)
+
+![](birds.png)
+
+## Import Libraries 
+
+```{r, results='hide'}
+library(tmap)
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(maps)
+library(dplyr)
+library(knitr)
+```
+
+## Read in EJScreen Data And Filter to Los Angeles
+
+```{r, results='hide'}
+# read in ejscreen data 
+ejscreen <- st_read("/Users/fletchermcconnell/Documents/EDS 223/assignment-2-fletcher-m/data/EJSCREEN_2023_BG_StatePct_with_AS_CNMI_GU_VI.gdb")
+
+# filter to Los Angeles County
+la <- ejscreen |> 
+  filter(CNTY_NAME == "Los Angeles County")
+```
+
+## Plot Census Block Groups Above 95the Percentile for Wastewater Discharge (PWDIS)
+
+```{r}
+# filter to census block groups above 95th percentile for wastewater discharge
+waste_above_95 <- la |> 
+  filter(P_PWDIS > 95)
+
+# calculate centroids for census block groups over 95th percentile in wastewater discharge
+la_waste_above95 <- st_centroid(waste_above_95)
+
+# plot wastewater discharge by census block group and centroids for above the 95th percentile
+tm_shape(la) +
+  tm_polygons(fill = "PWDIS") +
+  tm_shape(la_waste_above95) +
+  tm_dots()
+```
+
+## Import Redlining Information for Los Angeles
+
+```{r, results='hide'}
+LA_redlining <- st_read("https://dsl.richmond.edu/panorama/redlining/static/downloads/geojson/CALosAngeles1939.geojson") %>%
+  st_make_valid()
+```
+
+## Plot Redlining Boundaries and Color by HOLC grade
+
+```{r}
+# plot redlining boundaries based on HOLC grade
+tm_shape(LA_redlining) +
+  tm_borders(col = "holc_grade") +
+  tm_layout(main.title = "Map of Historical Redlining Boundaries in LA") +
+  tm_scale_bar() +
+  tm_compass(position = c("right", "top"))
+```
+
+## Find Number of Census Block Groups that Fall within HOLC Areas
+
+```{r, results='hide'}
+# adjust data sets so that the CRS match for both
+la_84 <- st_transform(la, crs = "WGS84")
+LA_redlining_84 <- st_transform(LA_redlining, crs = "WGS84")
+
+# find out how many census block groups fall within HOLC grades in LA (Answer: 887)
+la_84[LA_redlining, , op = st_within]
+```
+
+## Find Various Census Values and how they Compare among HOLC Grades
+
+```{r}
+# I put this line of code in again because I had trouble knitting. It was saying 'la_84 not found'. Not sure why.
+la_84 <- st_transform(la, crs = "WGS84")
+
+# join both data sets
+join_data <- st_join(x = la_84, y = LA_redlining, left = FALSE)
+
+# calculate means, of each HOLC group, for percent low income, percentile for particulate matter 2.5, percentile for l low life expectancy, and percentile for air toxics cancer risk 
+
+low_income <- join_data |> 
+  group_by(holc_grade) |>
+  summarize(mean_LOWINCPCT = mean(LOWINCPCT, na.rm = TRUE))
+
+
+pm_25 <- join_data |> 
+  group_by(holc_grade) |>
+  summarize(mean_P_PM25 = mean(P_PM25, na.rm = TRUE))
+
+
+low_life <- join_data |> 
+  group_by(holc_grade) |>
+  summarize(mean_LIFEEXPPCT = mean(LIFEEXPPCT, na.rm = TRUE))
+
+cancer_risk <- join_data |> 
+  group_by(holc_grade) |>
+  summarize(mean_P_CANCER = mean(P_CANCER, na.rm = TRUE))
+
+# display results 
+summary_table <- bind_cols(low_income, pm_25, low_life, cancer_risk)
+summary_table_df <- kable(summary_table, format = "html")
+summary_table_df
+
+
+```
+
+## Find the Percent of Bird Observations Within Each HOLC grade Category
+
+```{r}
+# read in bird data
+birds <- st_read("/Users/fletchermcconnell/Documents/EDS 223/assignment-2-fletcher-m/data/gbif-birds-LA/gbif-birds-LA.shp")
+
+# join bird observation data with LA Redlining data
+birds_redline <- st_join(birds, LA_redlining)
+
+# filter to bird observation points within HOLC grades
+points_within_redlining <- st_filter(birds_redline, LA_redlining)
+
+# create a subset of 2022 bird observations (percentage in each HOLC), grouped by HOLC grade 
+birds_holc <- points_within_redlining |> 
+  group_by(holc_grade) |> 
+  filter(year == 2022) |> 
+  mutate(percent_in_holc = n() / nrow(points_within_redlining))
+
+# plot percentage of bird obs. in each HOLC grade
+ggplot(birds_holc) +
+  geom_col(aes(x=holc_grade, y=percent_in_holc), color = "seagreen")
+
+```
